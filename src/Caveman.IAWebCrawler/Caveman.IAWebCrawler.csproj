@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Caveman.IAWebCrawler</RootNamespace>
+    <AssemblyName>Caveman.IAWebCrawler</AssemblyName>
+
+    <!-- Metadata NuGet (aligned with the Caveman family package) -->
+    <PackageId>Caveman.IAWebCrawler</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Francesco Paolo Passaro</Authors>
+    <Company>Francesco Paolo Passaro</Company>
+    <Title>Caveman.IAWebCrawler</Title>
+    <Description>Web crawler for .NET 10 that downloads a complete website and produces three combinable outputs: JSON (extracted information), Markdown snapshot (AI/LLM-ready, with RAG corpus, llms.txt and imported teaser pages) and a raw file archive (html, js, css, images, fonts, pdf, docx, csv...) with locally rewritten links. Licensed under the Caveman License (MIT + mandatory attribution to Passaro Francesco Paolo - Digitalsolutions.it).</Description>
+    <PackageTags>AI;crawler;web;scraping;markdown;RAG;LLM;json;html;pdf;archive</PackageTags>
+    <RepositoryUrl>https://github.com/francescopaolopassaro/Caveman.IAWebCrawler</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/francescopaolopassaro/Caveman.IAWebCrawler/</PackageProjectUrl>
+    <Copyright>Copyright (c) 2026 Passaro Francesco Paolo - Digitalsolutions.it</Copyright>
+    <PackageReleaseNotes>0.1.0: first public release. Three combinable outputs (Json / Markdown / Files), 20 browser identities + 40 Accept-Language profiles, session warm-up with token/cookie replay, CSS-recursive asset discovery (fonts, sprites, CDN), Markdown snapshot with imported teaser pages, RAG corpus (chunks/pages/corpus/manifest), llms.txt, raw archive with locally rewritten links and de-minified js/css.</PackageReleaseNotes>
+    <PackageIcon>caveman-icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageRequireLicenseAcceptance>False</PackageRequireLicenseAcceptance>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Primary public API is documented; suppress "missing XML comment" for the rest. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Package payloads: icon, readme (repo root), license and notice -->
+    <None Include="caveman-icon.png" Pack="True" PackagePath="\" />
+    <None Include="..\..\README.md" Pack="True" PackagePath="\" />
+    <None Include="LICENSE" Pack="True" PackagePath="\" />
+    <None Include="NOTICE" Pack="True" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AngleSharp" Version="1.9.0" />
+    <PackageReference Include="Stilo.Documents" Version="1.2.0" />
+  </ItemGroup>
+
+</Project>

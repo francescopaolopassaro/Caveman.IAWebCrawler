@@ -1,0 +1,38 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+artifacts/
+publish/
+
+# Binaries
+*.dll
+*.exe
+*.pdb
+*.nupkg
+*.snupkg
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.rsuser
+.vscode/
+
+# Test results / coverage
+TestResults/
+*.trx
+coverage*.xml
+*.coverage
+
+# NuGet
+packages/
+project.lock.json
+
+# Logs
+*.log

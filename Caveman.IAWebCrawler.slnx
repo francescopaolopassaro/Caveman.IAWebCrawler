@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Caveman.IAWebCrawler/Caveman.IAWebCrawler.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Caveman.IAWebCrawler.Test/Caveman.IAWebCrawler.Test.csproj" />
+  </Folder>
+</Solution>

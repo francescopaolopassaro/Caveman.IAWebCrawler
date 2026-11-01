@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "folderColors": {},
+  "favorites": [],
+  "configuration": "Debug",
+  "platform": "Any CPU",
+  "startupProject": "test/Caveman.IAWebCrawler.Test/Caveman.IAWebCrawler.Test.csproj",
+  "profiles": [],
+  "slnLaunchImported": false,
+  "startupMode": "single",
+  "startupProjects": [],
+  "browser": "default",
+  "launchBrowser": true,
+  "startupEnvironment": {},
+  "startupUrls": {},
+  "breakpoints": {},
+  "breakpointsEx": {},
+  "editor": {
+    "fontSize": 13,
+    "tabSize": 4,
+    "insertSpaces": true,
+    "wordWrap": true,
+    "minimap": true,
+    "stickyScroll": true,
+    "ligatures": false,
+    "renderWhitespace": "none",
+    "formatOnSave": false,
+    "trimWhitespace": false,
+    "finalNewline": false
+  },
+  "autoSave": false,
+  "lspWizardDismissed": false,
+  "buildArgs": {},
+  "frameworks": {},
+  "showAllFiles": false,
+  "ai": {
+    "language": "",
+    "testFramework": "",
+    "docStyle": "",
+    "extraInstructions": "",
+    "maxContextChars": 24000
+  }
+}
