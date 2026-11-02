@@ -30,9 +30,14 @@ namespace Caveman.IAWebCrawler;
 
         private readonly List<PageResult> _pages = new();
         private readonly List<ResourceInfo> _resources = new();
+        private readonly List<Extraction.ScrapeRecipe> _recipes = new();
+        private readonly List<Extraction.RecipeResult> _scrapeResults = new();
         private readonly CrawlStats _stats = new();
         private readonly SiteInfo _site = new();
         private RobotsEvaluator _robots = new();
+
+        /// <summary>Results of the post-crawl scraping recipes (LINQ-friendly).</summary>
+        public IReadOnlyList<Extraction.RecipeResult> ScrapeResults => _scrapeResults;
 
         /// <summary>
         /// Session cookies captured from responses when the caller provided an
@@ -51,6 +56,9 @@ namespace Caveman.IAWebCrawler;
                 throw new ArgumentException("StartUrl is not a valid http/https URL.", nameof(options));
             _siteRoot = new Uri(start.GetLeftPart(UriPartial.Authority));
             _host = start.Host;
+
+            if (options.ScrapeRecipes.Count > 0)
+                _recipes.AddRange(Extraction.ScrapeRecipe.LoadFrom(options.ScrapeRecipes));
 
             if (httpClient is null)
             {
@@ -178,10 +186,31 @@ namespace Caveman.IAWebCrawler;
             if (delay > 0) await Task.Delay(delay, ct);
         }
 
-        // --- snapshot expansion for markdown: pages linked but not reached ---
-        if (_options.Modes.HasFlag(CrawlModes.Markdown) && _options.GenerateAiOutputs &&
-            _options.ExpandUncrawledLinks)
+        // --- post-crawl expansion: pages linked but not reached (capped) ---
+        // the Markdown snapshot needs their text, the files/ archive their raw
+        // copy: internal links keep working inside the local tree
+        var wantsExpansion = (_options.Modes.HasFlag(CrawlModes.Markdown) && _options.GenerateAiOutputs) ||
+                             _options.SaveRawResponse;
+        if (wantsExpansion && _options.ExpandUncrawledLinks)
+        {
             await ExpandUncrawledLinksAsync(delay, ct);
+
+            // the imported pages queued their own assets: download them as well
+            // (pages stay out: the expansion list itself is the page cap here)
+            while (_queue.Count > 0 && !ct.IsCancellationRequested)
+            {
+                var (url2, depth2, from2) = _queue.Dequeue();
+                if (!_visited.Add(url2)) continue;
+
+                var kind2 = _resourceTypes.TryGetValue(url2, out var t2) ? t2 : ResourceType.Page;
+                if (kind2 == ResourceType.Page) { _visited.Remove(url2); continue; }
+
+                if (_options.RespectRobotsTxt && !_robots.IsAllowed(new Uri(url2))) continue;
+
+                await CrawlOneAsync(url2, depth2, from2, ct);
+                if (delay > 0) await Task.Delay(delay, ct);
+            }
+        }
 
         // --- output ---
         await WriteOutputsAsync(ct);
@@ -231,42 +260,27 @@ namespace Caveman.IAWebCrawler;
         if (pending.Count == 0) return;
         if (pending.Count > _options.MaxExpansionPages)
         {
-            Log($"  ⋄ snapshot expansion: {pending.Count} linked pages not reached, fetching {_options.MaxExpansionPages}");
+            Log($"  ⋄ expansion: {pending.Count} linked pages not reached, fetching {_options.MaxExpansionPages}");
             pending = pending.Take(_options.MaxExpansionPages).ToList();
         }
         else
-            Log($"  ⋄ snapshot expansion: {pending.Count} linked pages to include in the markdown");
+            Log($"  ⋄ expansion: {pending.Count} linked pages not reached");
 
         int imported = 0;
+        var pagesBefore = _pages.Count;
         foreach (var (url, from) in pending)
         {
             ct.ThrowIfCancellationRequested();
+            if (_options.RespectRobotsTxt && !_robots.IsAllowed(new Uri(url))) continue;
+
             try
             {
-                using var resp = await SendAsync(url, ct);
-                var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
-                if (!resp.IsSuccessStatusCode || !contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
-                {
-                    _visited.Add(url); // not an html page: don't retry later
-                    continue;
-                }
-                var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-                if (bytes.Length > _options.MaxFileBytes) { _visited.Add(url); continue; }
-
-                var pageUri = resp.RequestMessage?.RequestUri ?? new Uri(url);
-                var html = Decode(bytes, contentType);
-                var doc = _extractor.Parse(html);
-                var expanded = _extractor.Extract(doc, pageUri, from, depth: 0);
-                expanded.StatusCode = 200;
-                expanded.ContentType = contentType;
-                expanded.ContentLengthBytes = bytes.Length;
-                expanded.Imported = true;
-                _visited.Add(url);
-                if (!_visited.Contains(pageUri.ToString())) _visited.Add(pageUri.ToString());
-                _pages.Add(expanded);
+                // full pipeline for the imported page: raw copy into files/,
+                // extraction (json/markdown) and asset queueing (fonts, css, images)
+                await CrawlOneAsync(url, _options.MaxDepth, from, ct);
                 imported++;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 Log($"  ✗ expansion {url}: {ex.Message}");
                 _visited.Add(url);
@@ -275,9 +289,13 @@ namespace Caveman.IAWebCrawler;
             if (delay > 0) await Task.Delay(delay, ct);
         }
 
+        // tag the newly imported pages (the Markdown writer marks their provenance)
+        for (var i = pagesBefore; i < _pages.Count; i++)
+            _pages[i].Imported = true;
+
         _stats.PagesCrawled = _pages.Count;
         if (imported > 0)
-            Log($"  ✓ snapshot: {imported} pages imported into the markdown with their source");
+            Log($"  ✓ expansion: {imported} linked pages imported after the main crawl");
     }
 
     // ------------------------------------------------------------------ crawl
@@ -428,7 +446,7 @@ namespace Caveman.IAWebCrawler;
             var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
             if (bytes.Length > _options.MaxFileBytes)
             {
-                RecordError(url, $"File troppo grande ({bytes.Length} byte)", from);
+                RecordError(url, $"File too large ({bytes.Length} bytes)", from);
                 return;
             }
 
@@ -523,7 +541,13 @@ namespace Caveman.IAWebCrawler;
         page.StatusCode = 200;
         page.ContentType = contentType;
         page.ContentLengthBytes = bytes.Length;
-        if (fullExtraction)
+
+        // files/ mode: keep the page links anyway, so the post-crawl expansion
+        // can reach the pages the depth/page limits skipped
+        if (!fullExtraction)
+            foreach (var t in targets.Where(t => t.Type == ResourceType.Page))
+                page.Links.Add(new LinkInfo { Href = t.Uri.ToString(), Text = t.Text });
+        // mark internal links with the real host boundary (both extraction modes)
         {
             foreach (var link in page.Links)
                 if (Uri.TryCreate(link.Href, UriKind.Absolute, out var lu))
@@ -532,6 +556,7 @@ namespace Caveman.IAWebCrawler;
 
         _pages.Add(page);
         _stats.PagesCrawled = _pages.Count;
+        if (_recipes.Count > 0) page.RawHtml = html; // recipes run after the crawl on this copy
 
          // --- queueing by depth ---
         var nextDepth = depth + 1;
@@ -872,6 +897,39 @@ namespace Caveman.IAWebCrawler;
 
     private void Log(string message) => _options.Log?.Invoke(message);
 
+    // ---------------------------------------------------------------- recipes
+
+    /// <summary>
+    /// Fetches one HTML page for the scraping recipes: same session/cookies as
+    /// the crawl, robots.txt honored, politeness delay applied. Pagination
+    /// inside recipes goes through this delegate.
+    /// </summary>
+    private async Task<string?> FetchForScrapeAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+            if (_options.RespectRobotsTxt && !_robots.IsAllowed(uri)) return null;
+
+            await Task.Delay(_options.DelayMilliseconds, ct);
+
+            using var resp = await SendAsync(url, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+
+            var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
+            if (!contentType.Contains("html", StringComparison.OrdinalIgnoreCase) && !LooksLikeHtml(bytes))
+                return null;
+
+            return Decode(bytes, contentType);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+        {
+            Log($"  ✗ recipe pagination {url}: {ex.Message}");
+            return null;
+        }
+    }
+
     // ---------------------------------------------------------------- output
 
     private async Task WriteOutputsAsync(CancellationToken ct)
@@ -893,10 +951,11 @@ namespace Caveman.IAWebCrawler;
 
         if (modes.HasFlag(CrawlModes.Files)) Log($"  Files archived in: {Path.Combine(_options.OutputDirectory, "files")}");
 
-        // riscrittura dei percorsi (href/src/url()) verso i file salvati + beautify js/css
+        // path rewriting (href/src/url()) toward the saved files, then js/css beautify
         if (_options.SaveRawResponse)
         {
-            Output.LinkRewriter.Rewrite(_pages, _resources, _options.OutputDirectory, Log);
+            Output.LinkRewriter.Rewrite(_pages, _resources, _options.OutputDirectory,
+                _options.MissingInternalLinksToLiveUrl ? _host : null, Log);
             if (_options.BeautifyAssets)
                 Output.AssetBeautifier.Beautify(_resources, _options.OutputDirectory, Log);
         }
@@ -910,6 +969,17 @@ namespace Caveman.IAWebCrawler;
                 await Output.LlmsTxtWriter.WriteAsync(result, _options.OutputDirectory, ct);
                 await Output.RagOutputWriter.WriteAsync(result, _options, ct);
             }
+        }
+
+        // --- declarative scraping recipes (scrape/<recipe-name>.json) ---
+        if (_recipes.Count > 0 && _recipes.Any(recipe => !recipe.Name.StartsWith('[')))
+        {
+            var scraper = new Extraction.RecipeScraper(_recipes,
+                fetchHtml: FetchForScrapeAsync,
+                urlAllowed: u => Uri.TryCreate(u, UriKind.Absolute, out var lu) && IsInternal(lu),
+                log: Log);
+            _scrapeResults.AddRange(await scraper.RunAsync(result.Pages, ct));
+            await Extraction.RecipeScraper.WriteResultsAsync(_scrapeResults, _options.OutputDirectory, ct);
         }
     }
 

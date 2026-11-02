@@ -91,8 +91,17 @@ public sealed class PageResult
     public List<string> Scripts { get; set; } = new();
     public List<string> Stylesheets { get; set; } = new();
 
-    /// <summary>Page converted to Markdown (available in Json/Markdown modes only).</summary>
+    /// <summary>
+    /// Page converted to Markdown (available in Json/Markdown modes only).
+    /// </summary>
     public string Markdown { get; set; } = "";
+
+    /// <summary>
+    /// Decoded HTML document, kept only when declarative scraping recipes are
+    /// configured (they run after the crawl on this in-memory copy). Not serialized.
+    /// </summary>
+    [JsonIgnore]
+    public string? RawHtml { get; set; }
 }
 
 public sealed class HeadingInfo

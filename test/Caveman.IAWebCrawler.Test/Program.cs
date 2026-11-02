@@ -17,6 +17,8 @@ using Caveman.IAWebCrawler;
 //                ja, ko, th, vi, id, ms  (or a full Accept-Language string)
 //   cookie:      starting cookies "name=value; name2=value2"
 //   header:      extra headers "Name=value; Name2=value2"
+//   scrape:      declarative scraping recipes (JSON file/folder), several with ';':
+//                the fields go into scrape/<recipe-name>.json and crawler.ScrapeResults
 //
 // Separate extraction per output type:
 //   -- json      -> json/results.json (extracted information)
@@ -26,7 +28,7 @@ using Caveman.IAWebCrawler;
 
 // --- positional arguments (url, pages, mode, folder, depth) ---
 var positional = new List<string>();
-string identity = "chrome", language = "it", cookie = "", header = "";
+string identity = "chrome", language = "it", cookie = "", header = "", scrape = "";
 foreach (var raw in args)
 {
     if (raw.StartsWith("--", StringComparison.Ordinal))
@@ -39,6 +41,7 @@ foreach (var raw in args)
             case "language": case "lingua":   language = val; break;
             case "cookie":    cookie = val; break;
             case "header":    header = val; break;
+            case "scrape":    scrape = val; break; // recipe files/folders: --scrape=r1.json;r2.json
             default: Console.WriteLine($"? unrecognized option: --{kv[0]}"); break;
         }
     }
@@ -89,6 +92,10 @@ foreach (var (name, value) in ParsePairs(cookie))
 foreach (var (name, value) in ParsePairs(header))
     options.ExtraHeaders[name] = value;
 
+// declarative scraping recipes: --scrape=recipes.json  or  --scrape=r1.json;r2.json
+foreach (var path in scrape.Split(';', StringSplitOptions.RemoveEmptyEntries))
+    if (path.Trim().Length > 0) options.ScrapeRecipes.Add(path.Trim());
+
 static IEnumerable<(string Name, string Value)> ParsePairs(string spec)
 {
     foreach (var part in spec.Split(';', StringSplitOptions.RemoveEmptyEntries))
@@ -134,6 +141,15 @@ if (docs.Count > 0)
     Console.WriteLine();
     Console.WriteLine("Documents encountered (first 15):");
     foreach (var d in docs) Console.WriteLine($"   {d}");
+}
+
+// scraping recipes summary (LINQ on crawler.ScrapeResults)
+if (crawler.ScrapeResults.Count > 0)
+{
+    Console.WriteLine();
+    Console.WriteLine("Scrape recipes:");
+    foreach (var r in crawler.ScrapeResults.Where(r => r.Items.Count > 0).Take(10))
+        Console.WriteLine($"   {r.Recipe,-30} items: {r.Items.Count,4}   pages: {r.PagesScanned.Count}");
 }
 
 Console.WriteLine();

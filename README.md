@@ -84,6 +84,31 @@ stored and automatically replayed on every following request (pages, assets and
 documents). Rejected attempts (HTTP 403/429) are retried after a pause — the usual
 behaviour of municipal CMS sites that release their token only after the first visit.
 
+## Files mode: a browsable local archive
+
+The `files/` archive is not just a dump: `LinkRewriter` post-processes it so the
+downloaded site opens in a browser **like the original** (double-click on
+`files/<host>/home.html` or through the generated `serve.cmd` / `serve.sh`):
+
+- every `href/src/srcset/action/data-src/poster`, the CSS `url()`/`@import`
+  references and the SVG `<use xlink:href>` sprites are rewritten to **relative
+  paths** toward the saved copies — zero root-absolute references remain;
+- the site webfonts (also the ones inside inline `<style>` blocks), the
+  `manifest.json`, the svg sprites and the favicon are downloaded as well;
+- de-minified js/css (`BeautifyAssets`) for readability;
+- **missing pages**: pages linked but not reached within the depth/page limits
+  are fetched after the crawl with the full pipeline (`ExpandUncrawledLinks`,
+  cap `MaxExpansionPages`) — in Files mode too — so their raw copy stays local;
+- **beyond the cap**: the remaining internal page links are rewritten to the
+  live absolute URL instead of a dead `file:///C:/...` path
+  (`MissingInternalLinksToLiveUrl`, default on) — clicking them still opens the
+  real page;
+- file names containing URL-characters (`#`, `%`, `?`) are percent-encoded in the
+  generated links, exactly as a browser expects;
+- `serve.cmd` / `serve.sh` start a tiny local web server for the archive: with
+  `file://` some browsers block module scripts/CORS on assets — through the
+  local server everything loads exactly as on the live site.
+
 ## Markdown output: self-contained snapshot
 
 The Markdown output is a **complete snapshot for LLMs** — no references back to the
@@ -108,11 +133,83 @@ live site:
 - **`rag/manifest.json`** — statistics and instructions for the embedding pipeline.
 - **`llms.txt` / `llms-full.txt`** — the llmstxt.org index.
 
+## Scraping by declarative recipes
+
+Besides the generic extraction, the crawler can **scrape structured data from
+the pages it crawled using declarative JSON recipes** — a list of CSS selectors,
+evaluated once per matching page, with no custom code to write. Recipes are
+LINQ-friendly: the results land in `scrape/<recipe-name>.json` and in
+`crawler.ScrapeResults` (`IReadOnlyList<RecipeResult>`).
+
+```csharp
+options.ScrapeRecipes.Add("recipes/news.json");   // one or more files or folders (';')
+// ... after CrawlAsync():
+var titles = crawler.ScrapeResults
+    .SelectMany(r => r.Items)
+    .Select(i => i.Fields["title"].Trim())
+    .Take(10);
+```
+
+**Recipe JSON syntax** (a file holds an array of recipes or a single one):
+
+| Property | Meaning |
+|---|---|
+| `name` | recipe name → `scrape/<name>.json` |
+| `urlPattern` | optional regex: only pages whose URL matches are scraped (missing = all pages) |
+| `itemSelector` | optional CSS selector: one item per match (missing = one item per page) |
+| `pageFields` | fields evaluated once per page, merged into every item of that page |
+| `fields` | the item fields (see below) |
+| `nextPageSelector` | optional "next page" link: the listing pagination is followed automatically |
+| `maxNextPages` | cap of pagination hops (default 5) |
+
+Each field is `{ "name", "selector", "attribute", "regex", "default",
+"multipleSelector" }`:
+
+- `attribute` missing or `text` → element text; `innerHTML`/`outerHTML` or any
+  attribute name (`href`, `datetime`, `src`…);
+- `regex` with a group extracts/validates the value (group 1 wins, otherwise the
+  whole match; no match = value filtered out);
+- `multipleSelector` collects all matches into `Lists[field]`
+  (joined with ", " into `Fields[field]`);
+- `default` fills the value when nothing matches.
+
+**Example** — `recipes/silea-news.json`, used to scrape the demos/News listing of
+a municipal site (12 cards per page, pagination followed, dates extracted with a regex):
+
+```json
+[
+  {
+    "name": "silea-news",
+    "urlPattern": "/home/novita",
+    "itemSelector": "div.card-wrapper",
+    "pageFields": [
+      { "name": "page_title", "selector": "h1", "attribute": "text" }
+    ],
+    "fields": [
+      { "name": "title",    "selector": "h3 a[data-element='news-link']", "attribute": "text" },
+      { "name": "url",      "selector": "h3 a[data-element='news-link']", "attribute": "href" },
+      { "name": "kind",     "selector": ".category-top span.pe-1",        "attribute": "text" },
+      { "name": "date",     "selector": ".category-top span.data.d-none", "attribute": "text",
+        "regex": "(\\d{1,2} [a-z]+ 20\\d{2})" },
+      { "name": "abstract", "selector": "p.card-text",                    "attribute": "text" }
+    ],
+    "nextPageSelector": "a[rel='next'], [data-element='news-pagination'] a:last-of-type",
+    "maxNextPages": 3
+  }
+]
+```
+
+On the demo site this recipe yields **106 news items from 7 listing pages**
+(the pagination hops are fetched with the same session/cookies/robots/politeness
+of the crawl): each item has `sourceUrl` plus the fields above — ready to be
+loaded into the RAG pipeline or queried with LINQ.
+
 ## Test console (test/Caveman.IAWebCrawler.Test)
 
 ```bash
 dotnet run --project test/Caveman.IAWebCrawler.Test [url] [maxPages] [mode] [outputFolder] [depth]
               [--identity=...] [--language=...] [--cookie=name=value;...] [--header=Name=value;...]
+              [--scrape=recipe1.json[;recipe2.json...]]
 ```
 
 - `mode`: `json | markdown | files | all` (default `all`)
@@ -135,14 +232,18 @@ dotnet run --project test/Caveman.IAWebCrawler.Test https://www.comune.silea.tv.
 | `DownloadExternalAssets` | true | CDN assets (icon fonts, shared css/js) downloaded for the local render |
 | `SaveRawResponse` | true | raw copies in `files/` (Files mode) |
 | `SaveAssetsForMarkdown` | true | image copies in `assets/` for the Markdown snapshot |
-| `ExpandUncrawledLinks` | true | import the teaser pages in the Markdown snapshot (cap `MaxExpansionPages` = 100) |
+| `ExpandUncrawledLinks` | true | fetch the linked pages missed by the limits with the full pipeline (Markdown snapshot + files/ copies), cap `MaxExpansionPages` = 100 |
+| `MissingInternalLinksToLiveUrl` | true | internal page links beyond the expansion cap point to the live URL (no dead `file:///` paths) |
 | `FollowCssReferences` | true | recursive url()/@import extraction from the CSS (fonts, sprites, backgrounds) |
 | `RespectRobotsTxt` | true | Disallow + Crawl-delay honoured |
 | `BeautifyAssets` | true | de-minify archived js/css (readability) |
 | `RagChunkSize` / `RagChunkOverlap` | 900 / 150 | chunking of the RAG corpus |
+| `ScrapeRecipes` | (empty) | declarative scraping recipes (files/folders) → `scrape/*.json` + `crawler.ScrapeResults` |
 
 ## Notes
 
-- `LinkRewriter` post-processes the file archive so the downloaded site is browsable
-  locally (href/src/srcset/action/url()/@import); references to unsaved resources stay absolute.
 - Long paths are Windows-safe (MAX_PATH-proof) — segments are truncated and hashed when needed.
+- **Verifying the archive from scripts**: naive text checkers easily produce false positives. Resolve a
+  reference like a browser does — strip the fragment, decode **HTML entities** first (`&amp;` → `&`),
+  then **percent-encoding** (`%23` → `#`), and compare with **long-path-aware** file access (`\\?\` on
+  PowerShell/Windows): a validation on the demo archive reports 11,516 references, 0 broken.

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "silea-news",
+    "urlPattern": "/home/novita",
+    "itemSelector": "div.card-wrapper",
+    "pageFields": [
+      { "name": "page_title", "selector": "h1", "attribute": "text" }
+    ],
+    "fields": [
+      { "name": "title",  "selector": "h3 a[data-element='news-link']", "attribute": "text" },
+      { "name": "url",    "selector": "h3 a[data-element='news-link']", "attribute": "href" },
+      { "name": "kind",   "selector": ".category-top span.pe-1", "attribute": "text" },
+      { "name": "date",   "selector": ".category-top span.data.d-none", "attribute": "text",
+        "regex": "(\\d{1,2} [a-z]+ 20\\d{2})" },
+      { "name": "abstract", "selector": "p.card-text", "attribute": "text" }
+    ],
+    "nextPageSelector": "a[rel='next'], [data-element='news-pagination'] a:last-of-type",
+    "maxNextPages": 3
+  }
+]

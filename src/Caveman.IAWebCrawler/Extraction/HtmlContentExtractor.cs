@@ -152,6 +152,14 @@ public sealed partial class HtmlContentExtractor
             AddResource(href, ResourceType.Image, "svg");
         }
 
+        // svg sprite references: <use href="/sprites.svg#icon"> — without the
+        // downloaded sheet every icon of the site disappears in the local copy
+        foreach (var use in doc.QuerySelectorAll("use[href], svg [xlink\\:href]"))
+        {
+            var href = use.GetAttribute("href") ?? use.GetAttribute("xlink:href");
+            AddResource(href, ResourceType.Other, "sprite");
+        }
+
         // inline style background images: style="background-image: url(...)"
         foreach (var el in doc.QuerySelectorAll("[style]"))
             foreach (Match m in InlineCssUrl().Matches(el.GetAttribute("style") ?? ""))

@@ -144,6 +144,22 @@ public sealed class CrawlerOptions
     /// <summary>Maximum number of pages fetched for the Markdown snapshot expansion.</summary>
     public int MaxExpansionPages { get; set; } = 100;
 
+    /// <summary>
+    /// Internal page links left without a copy in the archive (page/depth limits)
+    /// are rewritten to the live absolute URL instead of a dead file:/// path:
+    /// clicking them still opens the real page. Sub-resources are not touched
+    /// (they are downloaded, so they always stay local).
+    /// </summary>
+    public bool MissingInternalLinksToLiveUrl { get; set; } = true;
+
+    /// <summary>
+    /// Declarative scraping recipes (JSON recipe files or recipe folders). They run
+    /// after the crawl on the pages matching their URL pattern, and the results are
+    /// written into <c>scrape/</c> (one JSON file per recipe) and exposed via
+    /// <see cref="CavemanWebCrawler.ScrapeResults"/> for LINQ consumers.
+    /// </summary>
+    public HashSet<string> ScrapeRecipes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Optional logging callback.</summary>
     public Action<string>? Log { get; set; }
 

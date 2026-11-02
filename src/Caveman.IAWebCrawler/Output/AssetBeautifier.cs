@@ -61,7 +61,8 @@ public static class AssetBeautifier
         char prevMeaningful = '\0';      // last non-space code char (regex detection)
 
         // a '/' opens a regex literal only after these characters
-        static bool RegexAllowed(char c) => "\0()[{};=:!?&|+<>^~/*%-\n\r".Contains(c);
+        // (never after ')' or ']': those always precede a division)
+        static bool RegexAllowed(char c) => "\0([{};=:!?&|+<>^~/*%-\n\r".Contains(c);
 
         void Break()
         {

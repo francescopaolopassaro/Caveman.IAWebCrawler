@@ -16,9 +16,13 @@ public static partial class LinkRewriter
     /// <summary>Mutable counter shared by the rewriter helpers (lambda-safe).</summary>
     private sealed class Counter { public int Rewritten; }
 
-    /// <summary>Rewrites the links inside the saved HTML/CSS files of the archive.</summary>
+    /// <summary>
+    /// Rewrites the links inside the saved HTML/CSS files of the archive.
+    /// When <paramref name="liveHost"/> is set (crawler start host), internal
+    /// page links with no local copy are rewritten to the live absolute URL.
+    /// </summary>
     public static void Rewrite(List<PageResult> pages, List<ResourceInfo> resources,
-        string outputDirectory, Action<string>? log = null)
+        string outputDirectory, string? liveHost = null, Action<string>? log = null)
     {
         var filesRoot = Path.Combine(outputDirectory, "files");
         if (!Directory.Exists(filesRoot))
@@ -65,7 +69,7 @@ public static partial class LinkRewriter
                 if (ext is ".html" or ".htm")
                 {
                     counter.Rewritten = 0;
-                    RewriteHtml(full, r.Url, filesRoot, urlMap, counter);
+                    RewriteHtml(full, r.Url, filesRoot, urlMap, counter, liveHost);
                     htmlDone += counter.Rewritten;
                 }
                 else if (ext == ".css")
@@ -103,7 +107,7 @@ public static partial class LinkRewriter
 
     /// <summary>Rewrites the links of one HTML file. Returns the number of rewritten references.</summary>
     private static void RewriteHtml(string file, string pageUrl, string filesRoot,
-        Dictionary<string, string> urlMap, Counter counter)
+        Dictionary<string, string> urlMap, Counter counter, string? liveHost = null)
     {
         var doc = new HtmlParser().ParseDocument(File.ReadAllText(file));
 
@@ -137,13 +141,38 @@ public static partial class LinkRewriter
                         rewritten = true;
                         counter.Rewritten++;
                     }
+                    else if (attr == "href" &&
+                             LiveUrl(link, pageUrl, liveHost) is { } live)
+                    {
+                        // internal page not reached by the crawl: keep it navigable
+                        // through the live URL instead of a broken file:/// path
+                        parts[i] = live + suffix;
+                        rewritten = true;
+                        counter.Rewritten++;
+                    }
                 }
                 if (rewritten) el.SetAttribute(attr, string.Join(", ", parts));
             }
 
+            // xlink-namespaced attributes (svg <use xlink:href="...">): AngleSharp
+            // stores them with local name 'href' and the xlink namespace URI,
+            // invisible both to GetAttribute(name) and to a colon-name scan
+            foreach (var attr in el.Attributes
+                .Where(a => a.NamespaceUri == "http://www.w3.org/1999/xlink" &&
+                            !string.IsNullOrWhiteSpace(a.Value))
+                .ToList())
+            {
+                if (IsSkippable(attr.Value)) continue;
+
+                if (Resolve(attr.Value, pageUrl, file, filesRoot, urlMap) is { } target)
+                {
+                    attr.Value = target;
+                    counter.Rewritten++;
+                }
+            }
+
             // inline style="" attribute: background-image url(...) references
-            var styleAttr = el.GetAttribute("style");
-            if (!string.IsNullOrWhiteSpace(styleAttr) && styleAttr.Contains("url("))
+            var styleAttr = el.GetAttribute("style");            if (!string.IsNullOrWhiteSpace(styleAttr) && styleAttr.Contains("url("))
             {
                 var rewrittenStyle = RewriteCssText(styleAttr, pageUrl, file, filesRoot, urlMap, counter);
                 if (rewrittenStyle != styleAttr) el.SetAttribute("style", rewrittenStyle);
@@ -261,13 +290,36 @@ public static partial class LinkRewriter
         return null;
     }
 
-    /// <summary>Local relative path between an owner file and an archive entry.</summary>
+    /// <summary>
+    /// Absolute live URL of an internal page when the archive has no copy of it
+    /// (same host as the crawl). Links stay clickable and open the real page.
+    /// </summary>
+    private static string? LiveUrl(string link, string pageUrl, string? liveHost)
+    {
+        if (liveHost is null) return null;
+        if (!Uri.TryCreate(pageUrl, UriKind.Absolute, out var baseUri)) return null;
+        if (!Uri.TryCreate(baseUri, link, out var abs)) return null;
+        if (abs.Host != liveHost || abs.Scheme is not ("http" or "https")) return null;
+
+        return abs.Scheme + "://" + abs.Authority + abs.PathAndQuery;
+    }
+
+    /// <summary>
+    /// Local relative URL between an owner file and an archive entry.
+    /// Percent-encodes the characters that lose their meaning inside a URL
+    /// (file names can legally contain '#', '%' or '?').
+    /// </summary>
     private static string Relative(string ownerFile, string filesRoot, string targetPath)
     {
         var ownerDir = Path.GetDirectoryName(ownerFile)!;
         var target = Path.Combine(filesRoot, targetPath.Replace('/', Path.DirectorySeparatorChar));
         var rel = Path.GetRelativePath(ownerDir, target).Replace('\\', '/');
-        return rel.StartsWith('.') ? rel : "./" + rel;
+        if (!rel.StartsWith('.')) rel = "./" + rel;
+
+        // URL-unsafe characters inside file names must be encoded, otherwise
+        // '#' becomes a fragment terminator ('l&#039;name.svg' resolves wrong)
+        rel = rel.Replace("%", "%25").Replace("#", "%23").Replace("?", "%3F").Replace("\"", "%22");
+        return rel;
     }
 
     /// <summary>
